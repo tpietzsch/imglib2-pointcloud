@@ -3,27 +3,22 @@ package net.imglib2.kdtree;
 import ij.ImageJ;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import net.imglib2.Interval;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.RealPoint;
 import net.imglib2.RealRandomAccessible;
-import net.imglib2.cache.img.CachedCellImg;
 import net.imglib2.converter.Converters;
-import net.imglib2.converter.RealTypeConverters;
 import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.interpolation.neighborsearch.NearestNeighborSearchInterpolatorFactory;
-import net.imglib2.kdtree.KDTree;
-import net.imglib2.kdtree.NearestNeighborSearchOnKDTree;
+import net.imglib2.kdtree.KDTreeData.PositionsLayout;
 import net.imglib2.neighborsearch.NearestNeighborSearch;
-import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.ARGBType;
 import net.imglib2.type.numeric.integer.UnsignedIntType;
 import net.imglib2.util.Intervals;
-import net.imglib2.util.Util;
 import net.imglib2.view.Views;
-import org.janelia.saalfeldlab.n5.Compression;
-import org.janelia.saalfeldlab.n5.DataBlock;
 import org.janelia.saalfeldlab.n5.DataType;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.DoubleArrayDataBlock;
@@ -33,6 +28,9 @@ import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.RawCompression;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
+
+import static net.imglib2.kdtree.KDTreeData.PositionsLayout.FLAT;
+import static net.imglib2.kdtree.KDTreeData.PositionsLayout.NESTED;
 
 public class IoPlayground
 {
@@ -57,50 +55,24 @@ public class IoPlayground
 		ImageJFunctions.show( view );
 	}
 
+	static final String VALUES = "values";
+
 	private static void writeToN5( final KDTree< ARGBType> kdtree ) throws IOException
 	{
-		final KDTreeData< ARGBType > data = kdtree.treeData;
-		System.out.println( "data.layout() = " + data.layout() );
-		System.out.println( "data.size() = " + data.size() );
-
 		final String basePath = "/Users/pietzsch/Desktop/kdtree.n5";
 		final N5Writer n5 = new N5FSWriter( basePath );
 
-		{
-			final String positionsPath = "my-points";
+		final ValueWriter< ARGBType > valueWriter = ( values, n5Writer, pointcloudPath ) -> {
+			final RandomAccessibleInterval< UnsignedIntType > source = Converters.convert(
+					values,
+					( argb, uint ) -> uint.setInt( argb.get() ),
+					new UnsignedIntType() );
+			final int[] blockSize = { safeInt( values.dimension( 0 ) ) };
+			final String valuesPath = n5Writer.groupPath( pointcloudPath, VALUES );
+			N5Utils.save( source, n5Writer, valuesPath, blockSize, new RawCompression() );
+		};
 
-			// positions
-			// FLAT layout
-
-			final long[] dimensions = { data.numDimensions(), data.size() };
-			final int[] blockSize = { data.numDimensions(), data.size() };
-//			final int[] blockSize = { 1, data.size() }; // (TODO NESTED)
-			final DataType dataType = DataType.FLOAT64;
-			final Compression compression = new RawCompression();
-			final DatasetAttributes datasetAttributes = new DatasetAttributes( dimensions, blockSize, dataType, compression );
-			n5.createDataset( positionsPath, datasetAttributes );
-
-			long[] gridPosition = { 0, 0 };
-			double[] bdata = data.flatPositions();
-//			double[][] bdata = data.positions(); // (TODO NESTED)
-			final DoubleArrayDataBlock block = new DoubleArrayDataBlock( blockSize, gridPosition, bdata );
-
-			n5.writeBlock( positionsPath, datasetAttributes, block );
-		}
-
-		{
-			final String valuesPath = "my-point-data";
-
-			// values
-			// ARGBType -- convert to UnsignedIntType ...
-			final RandomAccessibleInterval< UnsignedIntType > source = Converters.convert( data.values(), ( argb, uint ) -> uint.setInt( argb.get() ), new UnsignedIntType() );
-			final int[] blockSize = { data.size() };
-			final Compression compression = new RawCompression();
-
-			N5Utils.save( source, n5, valuesPath, blockSize, compression );
-		}
-
-		n5.close();
+		writeToN5( kdtree, valueWriter, n5, "my-tree" );
 	}
 
 	private static KDTree< ARGBType > readFromN5() throws IOException
@@ -108,18 +80,128 @@ public class IoPlayground
 		final String basePath = "/Users/pietzsch/Desktop/kdtree.n5";
 		final N5Reader n5 = new N5FSReader( basePath );
 
-		final String positionsPath = "my-points";
-		final String valuesPath = "my-point-data";
+		final ValueReader< ARGBType > valueReader = ( n5Reader, pointcloudPath ) -> {
+			final String valuesPath = n5Reader.groupPath( pointcloudPath, VALUES );
+			final RandomAccessibleInterval< UnsignedIntType > uintValues = N5Utils.open( n5Reader, valuesPath );
+			final RandomAccessibleInterval< ARGBType > values = Converters.convert( uintValues, ( uint, argb ) -> argb.set( uint.getInt() ), new ARGBType() );
+			return values;
+		};
 
+		return readFromN5( valueReader, n5, "my-tree" );
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	static final String COORDINATES = "coordinates";
+
+	interface ValueWriter< T >
+	{
+		void write( RandomAccessibleInterval< T > values, final N5Writer n5, final String pointcloudPath ) throws IOException;
+	}
+
+	interface ValueReader< T >
+	{
+		RandomAccessibleInterval< T > read( final N5Reader n5, final String pointcloudPath ) throws IOException;
+	}
+
+	private static < T > void writeToN5(
+			final KDTree< T > kdtree,
+			final ValueWriter< T > valueWriter,
+			final N5Writer n5,
+			final String path
+	) throws IOException
+	{
+		final KDTreeData< T > data = kdtree.treeData;
+		final int numDimensions = data.numDimensions();
+		final int numPoints = data.size();
+		final PositionsLayout layout = data.layout();
+
+		final Map< String, Object > attributes = new HashMap<>();
+		attributes.put( "pointcloud", "1.0.0" );
+		attributes.put( "type", "kdtree" );
+		attributes.put( "kdtree-version", "0.1" );
+		attributes.put( "flatten-coordinates", layout == FLAT );
+
+		n5.createGroup( path );
+		n5.setAttributes( path, attributes );
+
+		final long[] dimensions = { numDimensions, numPoints };
+		final int[] blockSize = ( layout == FLAT )
+				? new int[] { numDimensions, numPoints }
+				: new int[] { 1, numPoints };
+
+		final DatasetAttributes datasetAttributes = new DatasetAttributes( dimensions, blockSize, DataType.FLOAT64, new RawCompression() );
+		final String positionsPath = n5.groupPath( path, COORDINATES );
+		n5.createDataset( positionsPath, datasetAttributes );
+
+		final long[] gridPosition = new long[ 2 ];
+		if ( layout == FLAT )
+		{
+			double[] bdata = data.flatPositions();
+			final DoubleArrayDataBlock block = new DoubleArrayDataBlock( blockSize, gridPosition, bdata );
+			n5.writeBlock( positionsPath, datasetAttributes, block );
+		}
+		else
+		{
+			double[][] bdata = data.positions();
+			for ( int d = 0; d < numDimensions; d++ )
+			{
+				gridPosition[ 0 ] = d;
+				final DoubleArrayDataBlock block = new DoubleArrayDataBlock( blockSize, gridPosition, bdata[ d ] );
+				n5.writeBlock( positionsPath, datasetAttributes, block );
+			}
+		}
+
+		valueWriter.write( data.values(), n5, path );
+	}
+
+	private static < T > KDTree< T > readFromN5(
+			final ValueReader< T > valueReader,
+			final N5Reader n5,
+			final String path
+	) throws IOException
+	{
+		final PositionsLayout layout =
+				n5.getAttribute( path, "flatten-coordinates", Boolean.class )
+						? FLAT
+						: NESTED;
+		final String positionsPath = n5.groupPath( path, COORDINATES );
 		final DatasetAttributes datasetAttributes = n5.getDatasetAttributes( positionsPath );
 		final int numDimensions = safeInt( datasetAttributes.getDimensions()[ 0 ] );
-		final int size = safeInt( datasetAttributes.getDimensions()[ 1 ] );
-		final double[] flatPositions = ( double[] ) n5.readBlock( positionsPath, datasetAttributes, 0, 0 ).getData();
+//		final int numPoints = safeInt( datasetAttributes.getDimensions()[ 1 ] );
 
-		final RandomAccessibleInterval< UnsignedIntType > uintValues = N5Utils.open( n5, valuesPath );
-		final RandomAccessibleInterval< ARGBType > values = Converters.convert( uintValues, ( uint, argb ) -> argb.set( uint.getInt() ), new ARGBType() );
-
-		return new KDTree<>( new KDTreeData<>( flatPositions, values ) );
+		final RandomAccessibleInterval< T > values = valueReader.read( n5, path );
+		if ( layout == FLAT )
+		{
+			final double[] flatPositions = ( double[] ) n5.readBlock( positionsPath, datasetAttributes, 0, 0 ).getData();
+			return new KDTree<>( new KDTreeData<>( flatPositions, values ) );
+		}
+		else
+		{
+			final double[][] positions = new double[ numDimensions ][];
+			for ( int d = 0; d < numDimensions; d++ )
+			{
+				positions[ d ] = ( double[] ) n5.readBlock( positionsPath, datasetAttributes, d, 0 ).getData();
+			}
+			return new KDTree<>( new KDTreeData<>( positions, values ) );
+		}
 	}
 
 	private static int safeInt( final long value )
@@ -128,6 +210,22 @@ public class IoPlayground
 			throw new IllegalArgumentException( "value too large" );
 		return ( int ) value;
 	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 	static KDTree<ARGBType> createKDTree()
