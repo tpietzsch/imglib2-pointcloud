@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.imglib2.Interval;
+import net.imglib2.KDTree;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.RealPoint;
 import net.imglib2.RealRandomAccessible;
@@ -15,6 +16,7 @@ import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.interpolation.neighborsearch.NearestNeighborSearchInterpolatorFactory;
 import net.imglib2.kdtree.KDTreeData.PositionsLayout;
 import net.imglib2.neighborsearch.NearestNeighborSearch;
+import net.imglib2.neighborsearch.NearestNeighborSearchOnKDTree;
 import net.imglib2.type.numeric.ARGBType;
 import net.imglib2.type.numeric.integer.UnsignedIntType;
 import net.imglib2.util.Intervals;
@@ -128,7 +130,7 @@ public class IoPlayground
 			final String path
 	) throws IOException
 	{
-		final KDTreeData< T > data = kdtree.treeData;
+		final KDTreeData< T > data = kdtree.treeData();
 		final int numDimensions = data.numDimensions();
 		final int numPoints = data.size();
 		final PositionsLayout layout = data.layout();
